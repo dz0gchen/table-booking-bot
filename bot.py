@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 TOKEN = ''
 CHANNEL_ID =
@@ -35,13 +35,56 @@ def format_date_full(date):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
     user_id = update.effective_user.id
 
     temp_orders[user_id] = {
         'table': None,
         'date': None,
         'time': None,
+        'phone': None,
     }
+
+    if not user.username:
+        phone_button = KeyboardButton("📱 Поделиться номером", request_contact=True)
+        reply_markup = ReplyKeyboardMarkup(
+            [[phone_button]],
+            one_time_keyboard=True,
+            resize_keyboard=True,
+        )
+
+        await update.message.reply_text(
+            f"👋 Привет, {user.first_name}, у вас не указан никнейм (имя пользователя).\n"
+            f"Для связи с вами, пожалуйста, поделитесь номером телефона или укажите никнейм в настройках тг:",
+            reply_markup=reply_markup
+        )
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("📅 Выбрать дату", callback_data='choose_date')],
+    ]
+
+    await update.message.reply_text(
+        f"👋 Привет, {user.first_name}, выберите дату бронирования:\n\n",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    contact = update.message.contact
+
+    if contact.user_id != user_id:
+        await update.message.reply_text("❌ Пожалуйста, поделитесь своим номером.")
+        return
+
+    temp_orders[user_id]['phone'] = contact.phone_number
+
+    remove_msg = await update.message.reply_text(
+        "⌛",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await remove_msg.delete()
 
     keyboard = [
         [InlineKeyboardButton("📅 Выбрать дату", callback_data='choose_date')],
@@ -188,6 +231,8 @@ async def send_reservation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     channel_msg = f"🆕 *НОВОЕ БРОНИРОВАНИЕ!*\n\n"
     channel_msg += f"👤 Клиент: {user.first_name} {user.last_name or ''}\n"
     channel_msg += f"🆔 ID: {user.id}\n"
+    if order.get('phone'):
+        channel_msg += f"📞 Телефон: {order['phone']}\n"
     channel_msg += f"📱 Username: @{user.username or 'нет'}\n\n"
     channel_msg += f"📅 *ДАТА:* {format_date_full(selected_date)}\n"
     channel_msg += f"⏰ *Время:* {selected_time}:00\n"
@@ -236,6 +281,7 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'table': None,
         'date': None,
         'time': None,
+        'phone': temp_orders.get(user_id, {}).get('phone'),
     }
 
     keyboard = [
@@ -252,6 +298,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler('start', start))
+    app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
 
     app.add_handler(CallbackQueryHandler(choose_date, pattern='choose_date'))
     app.add_handler(CallbackQueryHandler(select_date, pattern='date_'))
